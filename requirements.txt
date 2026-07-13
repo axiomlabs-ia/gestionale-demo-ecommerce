@@ -1,0 +1,6 @@
+flask
+python-dotenv
+anthropic
+google-genai
+pillow-heif
+Pillow
