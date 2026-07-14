@@ -9,6 +9,7 @@ Poi apri:  http://127.0.0.1:8000/
 """
 import os
 import re
+import sqlite3
 import threading
 from datetime import date
 
@@ -29,8 +30,10 @@ FREE_USES_PER_IP = int(os.environ.get('DEMO_FREE_USES', 3))     # "3 utilizzi" a
 GLOBAL_DAILY_CAP = int(os.environ.get('DEMO_GLOBAL_DAILY_CAP', 150))  # backstop chiavi
 
 _usage_lock = threading.Lock()
-_ip_uses: dict[str, int] = {}      # ip -> prove AI consumate (oggi)
-_global_uses = {'day': None, 'count': 0}
+# Contatore CONDIVISO tra i worker via SQLite (l'in-memory non si somma perché
+# Railway avvia più worker gunicorn, ognuno con la propria memoria). Il file sta
+# su disco effimero: si azzera a ogni redeploy, e comunque il conteggio è giornaliero.
+USAGE_DB = os.environ.get('USAGE_DB', os.path.join(HERE, 'usage.db'))
 
 
 def _client_ip() -> str:
@@ -41,28 +44,39 @@ def _client_ip() -> str:
     return request.remote_addr or 'unknown'
 
 
-def _reset_if_new_day() -> None:
-    today = date.today().isoformat()
-    if _global_uses['day'] != today:
-        _global_uses['day'] = today
-        _global_uses['count'] = 0
-        _ip_uses.clear()
+def _usage_conn():
+    conn = sqlite3.connect(USAGE_DB, timeout=10)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('CREATE TABLE IF NOT EXISTS ip_usage(ip TEXT, day TEXT, count INT, PRIMARY KEY(ip, day))')
+    conn.execute('CREATE TABLE IF NOT EXISTS global_usage(day TEXT PRIMARY KEY, count INT)')
+    return conn
 
 
 def check_and_count_use():
-    """Consuma una prova AI per l'IP chiamante. Ritorna (ok, remaining, reason).
-    ok=False => la vista deve rispondere col 'cartello' (limit_reached)."""
+    """Consuma una prova AI per l'IP chiamante (contatore condiviso su SQLite).
+    Ritorna (ok, remaining, reason). ok=False => la vista risponde col cartello."""
     ip = _client_ip()
-    with _usage_lock:
-        _reset_if_new_day()
-        if _global_uses['count'] >= GLOBAL_DAILY_CAP:
-            return False, 0, 'global'
-        used = _ip_uses.get(ip, 0)
-        if used >= FREE_USES_PER_IP:
-            return False, 0, 'ip'
-        _ip_uses[ip] = used + 1
-        _global_uses['count'] += 1
-        return True, FREE_USES_PER_IP - (used + 1), 'ok'
+    today = date.today().isoformat()
+    with _usage_lock:  # serializza i thread dello stesso worker; SQLite tra worker
+        conn = _usage_conn()
+        try:
+            with conn:  # transazione
+                grow = conn.execute('SELECT count FROM global_usage WHERE day=?', (today,)).fetchone()
+                if (grow[0] if grow else 0) >= GLOBAL_DAILY_CAP:
+                    return False, 0, 'global'
+                urow = conn.execute('SELECT count FROM ip_usage WHERE ip=? AND day=?', (ip, today)).fetchone()
+                used = urow[0] if urow else 0
+                if used >= FREE_USES_PER_IP:
+                    return False, 0, 'ip'
+                conn.execute(
+                    'INSERT INTO ip_usage(ip, day, count) VALUES(?,?,1) '
+                    'ON CONFLICT(ip, day) DO UPDATE SET count = count + 1', (ip, today))
+                conn.execute(
+                    'INSERT INTO global_usage(day, count) VALUES(?,1) '
+                    'ON CONFLICT(day) DO UPDATE SET count = count + 1', (today,))
+            return True, FREE_USES_PER_IP - (used + 1), 'ok'
+        finally:
+            conn.close()
 
 
 def _limit_response(reason: str):
@@ -188,16 +202,22 @@ def healthz():
 @app.route('/api/usage-debug')
 def usage_debug():
     """Diagnostica temporanea: cosa vede il server per il cap prove-AI."""
-    with _usage_lock:
-        return jsonify({
-            'seen_ip': _client_ip(),
-            'x_forwarded_for': request.headers.get('X-Forwarded-For', ''),
-            'remote_addr': request.remote_addr,
-            'ip_uses': dict(_ip_uses),
-            'global': dict(_global_uses),
-            'free_per_ip': FREE_USES_PER_IP,
-            'worker_pid': os.getpid(),
-        })
+    today = date.today().isoformat()
+    conn = _usage_conn()
+    try:
+        ip_uses = {r[0]: r[2] for r in conn.execute(
+            'SELECT ip, day, count FROM ip_usage WHERE day=?', (today,)).fetchall()}
+        grow = conn.execute('SELECT count FROM global_usage WHERE day=?', (today,)).fetchone()
+    finally:
+        conn.close()
+    return jsonify({
+        'seen_ip': _client_ip(),
+        'x_forwarded_for': request.headers.get('X-Forwarded-For', ''),
+        'ip_uses_today': ip_uses,
+        'global_today': grow[0] if grow else 0,
+        'free_per_ip': FREE_USES_PER_IP,
+        'worker_pid': os.getpid(),
+    })
 
 
 if __name__ == '__main__':
