@@ -185,6 +185,21 @@ def healthz():
     return jsonify({'ok': True})
 
 
+@app.route('/api/usage-debug')
+def usage_debug():
+    """Diagnostica temporanea: cosa vede il server per il cap prove-AI."""
+    with _usage_lock:
+        return jsonify({
+            'seen_ip': _client_ip(),
+            'x_forwarded_for': request.headers.get('X-Forwarded-For', ''),
+            'remote_addr': request.remote_addr,
+            'ip_uses': dict(_ip_uses),
+            'global': dict(_global_uses),
+            'free_per_ip': FREE_USES_PER_IP,
+            'worker_pid': os.getpid(),
+        })
+
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     # 0.0.0.0 così funziona anche dietro il proxy di Railway; in locale resta
