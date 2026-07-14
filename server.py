@@ -199,27 +199,6 @@ def healthz():
     return jsonify({'ok': True})
 
 
-@app.route('/api/usage-debug')
-def usage_debug():
-    """Diagnostica temporanea: cosa vede il server per il cap prove-AI."""
-    today = date.today().isoformat()
-    conn = _usage_conn()
-    try:
-        ip_uses = {r[0]: r[2] for r in conn.execute(
-            'SELECT ip, day, count FROM ip_usage WHERE day=?', (today,)).fetchall()}
-        grow = conn.execute('SELECT count FROM global_usage WHERE day=?', (today,)).fetchone()
-    finally:
-        conn.close()
-    return jsonify({
-        'seen_ip': _client_ip(),
-        'x_forwarded_for': request.headers.get('X-Forwarded-For', ''),
-        'ip_uses_today': ip_uses,
-        'global_today': grow[0] if grow else 0,
-        'free_per_ip': FREE_USES_PER_IP,
-        'worker_pid': os.getpid(),
-    })
-
-
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     # 0.0.0.0 così funziona anche dietro il proxy di Railway; in locale resta
