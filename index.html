@@ -1362,10 +1362,10 @@ setTimeout(animateBars,300);
 </style>
 <div id="demoLimit" role="dialog" aria-modal="true">
   <div class="dl-card">
-    <div class="dl-badge">🔒</div>
-    <h3>Hai finito le prove gratuite</h3>
-    <p id="dlMsg">Questa è una demo: le funzioni AI sono limitate a 3 prove. Attiva la versione
-      completa del gestionale sul tuo store — la configuriamo noi con le tue chiavi.</p>
+    <div class="dl-badge">✨</div>
+    <h3>Attiva la versione completa</h3>
+    <p id="dlMsg">Questa funzione AI è attiva nella versione completa del gestionale.
+      Scrivici e la attiviamo direttamente sul tuo store.</p>
     <div class="dl-actions">
       <a class="dl-cta dl-primary"
          href="mailto:axiomlabs.ia@gmail.com?subject=Voglio%20il%20gestionale%20e-commerce%20AI&body=Ciao%20Axiom%2C%20ho%20provato%20la%20demo%20del%20gestionale%20e%20vorrei%20attivarlo%20sul%20mio%20store.">
@@ -1384,19 +1384,29 @@ setTimeout(animateBars,300);
 // modificare ogni handler.
 (function(){
   const _fetch = window.fetch.bind(window);
+  const DEMO_MSG = "Questa funzione AI è attiva nella versione completa del gestionale. "
+    + "Scrivici e la attiviamo direttamente sul tuo store.";
+  function showCartello(msg){
+    const m=document.getElementById('dlMsg'); if(m&&msg) m.textContent=msg;
+    document.getElementById('demoLimit').classList.add('show');
+  }
   window.fetch = async function(...args){
-    const res = await _fetch(...args);
+    const url = (typeof args[0]==='string') ? args[0] : (args[0] && args[0].url) || '';
+    const isAI = url.indexOf('/api/store/')!==-1;
+    let res;
     try{
-      const url = (typeof args[0]==='string') ? args[0] : (args[0] && args[0].url) || '';
-      if(url.indexOf('/api/store/')!==-1 && res.status===429){
+      res = await _fetch(...args);
+    }catch(err){
+      if(isAI) showCartello(DEMO_MSG);   // backend irraggiungibile (es. su GitHub Pages)
+      throw err;
+    }
+    if(isAI && res.status>=400){
+      try{
         const clone = res.clone();
         const d = await clone.json().catch(()=>null);
-        if(d && d.limit_reached){
-          const m=document.getElementById('dlMsg'); if(m&&d.error) m.textContent=d.error;
-          document.getElementById('demoLimit').classList.add('show');
-        }
-      }
-    }catch(e){/* non bloccare mai la risposta reale */}
+        showCartello(d && d.limit_reached && d.error ? d.error : DEMO_MSG);
+      }catch(e){ showCartello(DEMO_MSG); }
+    }
     return res;
   };
 })();
