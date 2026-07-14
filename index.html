@@ -1332,9 +1332,15 @@ setTimeout(animateBars,300);
     try{
       const res=await fetch('/api/store/generate-scene',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:curImg,descrizione:$('nvDesc').value,categoria:$('nvCat').value})});
       const d=await res.json();
-      if(!d.success)throw new Error(d.error||'errore');
+      if(!d.success){
+        // Errore lato AI (quota/billing/servizio): niente dettagli tecnici al
+        // prospect, mostra il cartello "versione completa / contattaci".
+        if(d.limit_reached){ const m=document.getElementById('dlMsg'); if(m&&d.error)m.textContent=d.error; }
+        document.getElementById('demoLimit').classList.add('show');
+        return;
+      }
       wornUrl=d.image_url;$('nvWornImg').src=wornUrl;$('nvWornResult').style.display='block';
-    }catch(err){$('nvWornErr').textContent='Generazione non riuscita ('+err.message+'). La dashboard deve essere attiva.';$('nvWornErr').style.display='block';}
+    }catch(err){ document.getElementById('demoLimit').classList.add('show'); }
     finally{$('nvWornLoading').style.display='none';$('nvWornBtn').disabled=false;}
   });
 })();
