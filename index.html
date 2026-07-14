@@ -1339,5 +1339,67 @@ setTimeout(animateBars,300);
   });
 })();
 </script>
+
+<!-- ── Cartello "prove esaurite" (limite demo pubblica) ─────────────── -->
+<style>
+  #demoLimit{position:fixed;inset:0;z-index:9999;display:none;align-items:center;
+    justify-content:center;background:rgba(8,10,14,.82);backdrop-filter:blur(6px);padding:24px}
+  #demoLimit.show{display:flex}
+  #demoLimit .dl-card{max-width:440px;width:100%;background:#12151c;border:1px solid rgba(255,255,255,.10);
+    border-radius:18px;padding:34px 30px;text-align:center;box-shadow:0 30px 80px rgba(0,0,0,.55);
+    font-family:inherit;color:#eef1f6}
+  #demoLimit .dl-badge{width:56px;height:56px;border-radius:14px;margin:0 auto 18px;display:flex;
+    align-items:center;justify-content:center;font-size:26px;background:rgba(214,178,102,.14)}
+  #demoLimit h3{margin:0 0 10px;font-size:21px;letter-spacing:-.01em}
+  #demoLimit p{margin:0 0 22px;font-size:14.5px;line-height:1.6;color:#aab2c0}
+  #demoLimit .dl-actions{display:flex;flex-direction:column;gap:10px}
+  #demoLimit a.dl-cta,#demoLimit button.dl-cta{display:block;text-decoration:none;cursor:pointer;
+    border:0;font-family:inherit;font-size:15px;font-weight:600;padding:13px 18px;border-radius:11px}
+  #demoLimit a.dl-primary{background:var(--gold,#d6b266);color:#1a1408}
+  #demoLimit button.dl-ghost{background:transparent;color:#8b93a2;border:1px solid rgba(255,255,255,.12)}
+  #demoLimit .dl-contact{margin-top:16px;font-size:12.5px;color:#7b8494;line-height:1.7}
+  #demoLimit .dl-contact b{color:#c7cdd8;font-weight:600}
+</style>
+<div id="demoLimit" role="dialog" aria-modal="true">
+  <div class="dl-card">
+    <div class="dl-badge">🔒</div>
+    <h3>Hai finito le prove gratuite</h3>
+    <p id="dlMsg">Questa è una demo: le funzioni AI sono limitate a 3 prove. Attiva la versione
+      completa del gestionale sul tuo store — la configuriamo noi con le tue chiavi.</p>
+    <div class="dl-actions">
+      <a class="dl-cta dl-primary"
+         href="mailto:axiomlabs.ia@gmail.com?subject=Voglio%20il%20gestionale%20e-commerce%20AI&body=Ciao%20Axiom%2C%20ho%20provato%20la%20demo%20del%20gestionale%20e%20vorrei%20attivarlo%20sul%20mio%20store.">
+         Contattaci per la versione completa</a>
+      <button class="dl-cta dl-ghost" onclick="document.getElementById('demoLimit').classList.remove('show')">
+        Continua a esplorare la demo</button>
+    </div>
+    <div class="dl-contact">
+      <b>Axiom Labs</b> · axiomlabs.ia@gmail.com · +39 345 783 5222
+    </div>
+  </div>
+</div>
+<script>
+// Intercetta OGNI chiamata AI: se il backend risponde limit_reached, mostra il
+// cartello. Così copre tutte le funzioni (vision, refine, scene, insight) senza
+// modificare ogni handler.
+(function(){
+  const _fetch = window.fetch.bind(window);
+  window.fetch = async function(...args){
+    const res = await _fetch(...args);
+    try{
+      const url = (typeof args[0]==='string') ? args[0] : (args[0] && args[0].url) || '';
+      if(url.indexOf('/api/store/')!==-1 && res.status===429){
+        const clone = res.clone();
+        const d = await clone.json().catch(()=>null);
+        if(d && d.limit_reached){
+          const m=document.getElementById('dlMsg'); if(m&&d.error) m.textContent=d.error;
+          document.getElementById('demoLimit').classList.add('show');
+        }
+      }
+    }catch(e){/* non bloccare mai la risposta reale */}
+    return res;
+  };
+})();
+</script>
 </body>
 </html>

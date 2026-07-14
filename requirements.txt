@@ -4,3 +4,4 @@ anthropic
 google-genai
 pillow-heif
 Pillow
+gunicorn
