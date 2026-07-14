@@ -26,8 +26,12 @@ app = Flask(__name__, static_folder=None)
 # ── Usage cap (protegge le chiavi AI su un deploy pubblico) ──────────
 # Ogni visitatore ha diritto a un numero limitato di prove AND c'è un tetto
 # globale giornaliero come rete di sicurezza contro l'abuso da molti IP.
-FREE_USES_PER_IP = int(os.environ.get('DEMO_FREE_USES', 3))     # "3 utilizzi" a prospect
-GLOBAL_DAILY_CAP = int(os.environ.get('DEMO_GLOBAL_DAILY_CAP', 150))  # backstop chiavi
+# Il cap "a 3" vale SOLO sulla generazione immagini (Gemini), che è la spesa vera
+# (~0,13€/img). Le funzioni Claude (riconoscimento foto, rifinitura, considerazioni)
+# costano pochi centesimi e la considerazione parte in automatico aprendo un
+# prodotto: NON vanno contate contro il tetto, se no dopo 1 prodotto sei bloccato.
+IMG_USES_PER_IP = int(os.environ.get('DEMO_IMG_USES', 3))            # foto ambientate a visitatore
+GLOBAL_DAILY_CAP = int(os.environ.get('DEMO_GLOBAL_DAILY_CAP', 500))  # backstop giornaliero su TUTTE le chiamate AI
 
 _usage_lock = threading.Lock()
 # Contatore CONDIVISO tra i worker via SQLite (l'in-memory non si somma perché
@@ -52,9 +56,12 @@ def _usage_conn():
     return conn
 
 
-def check_and_count_use():
-    """Consuma una prova AI per l'IP chiamante (contatore condiviso su SQLite).
-    Ritorna (ok, remaining, reason). ok=False => la vista risponde col cartello."""
+def check_ai_use(image=False):
+    """Registra una chiamata AI (contatore condiviso su SQLite tra i worker).
+    - `image=True` (generazione foto ambientata): applica il tetto per-IP a IMG_USES_PER_IP.
+    - `image=False` (funzioni Claude): nessun limite per-IP, solo il backstop globale.
+    Tutte le chiamate contano verso il tetto globale giornaliero.
+    Ritorna (ok, remaining, reason); ok=False => la vista risponde col cartello."""
     ip = _client_ip()
     today = date.today().isoformat()
     with _usage_lock:  # serializza i thread dello stesso worker; SQLite tra worker
@@ -64,25 +71,32 @@ def check_and_count_use():
                 grow = conn.execute('SELECT count FROM global_usage WHERE day=?', (today,)).fetchone()
                 if (grow[0] if grow else 0) >= GLOBAL_DAILY_CAP:
                     return False, 0, 'global'
-                urow = conn.execute('SELECT count FROM ip_usage WHERE ip=? AND day=?', (ip, today)).fetchone()
-                used = urow[0] if urow else 0
-                if used >= FREE_USES_PER_IP:
-                    return False, 0, 'ip'
-                conn.execute(
-                    'INSERT INTO ip_usage(ip, day, count) VALUES(?,?,1) '
-                    'ON CONFLICT(ip, day) DO UPDATE SET count = count + 1', (ip, today))
+                used = 0
+                if image:
+                    urow = conn.execute('SELECT count FROM ip_usage WHERE ip=? AND day=?', (ip, today)).fetchone()
+                    used = urow[0] if urow else 0
+                    if used >= IMG_USES_PER_IP:
+                        return False, 0, 'ip'
+                    conn.execute(
+                        'INSERT INTO ip_usage(ip, day, count) VALUES(?,?,1) '
+                        'ON CONFLICT(ip, day) DO UPDATE SET count = count + 1', (ip, today))
                 conn.execute(
                     'INSERT INTO global_usage(day, count) VALUES(?,1) '
                     'ON CONFLICT(day) DO UPDATE SET count = count + 1', (today,))
-            return True, FREE_USES_PER_IP - (used + 1), 'ok'
+            remaining = (IMG_USES_PER_IP - (used + 1)) if image else -1
+            return True, remaining, 'ok'
         finally:
             conn.close()
 
 
 def _limit_response(reason: str):
     """Il 'cartello': invita a contattare Axiom quando le prove sono finite."""
-    msg = ("Hai esaurito le prove gratuite di questa demo. "
-           "Scrivici per attivare la versione completa del gestionale sul tuo store.")
+    if reason == 'global':
+        msg = ("La demo è molto richiesta oggi e ha raggiunto il limite giornaliero. "
+               "Scrivici per avere la tua versione completa, senza limiti.")
+    else:
+        msg = ("Hai già generato le foto ambientate incluse nella demo. "
+               "Nella versione completa sul tuo store non ci sono limiti — scrivici per attivarla.")
     return jsonify({
         'success': False,
         'limit_reached': True,
@@ -137,7 +151,7 @@ def api_vision():
     img, media = _img_from_payload(data)
     if not img:
         return jsonify({'success': False, 'error': 'image required'}), 400
-    ok, _rem, reason = check_and_count_use()
+    ok, _rem, reason = check_ai_use(image=False)
     if not ok:
         return _limit_response(reason)
     try:
@@ -155,7 +169,7 @@ def api_refine():
         return jsonify({'success': False, 'error': 'image required'}), 400
     if not istruzione:
         return jsonify({'success': False, 'error': 'istruzione required'}), 400
-    ok, _rem, reason = check_and_count_use()
+    ok, _rem, reason = check_ai_use(image=False)
     if not ok:
         return _limit_response(reason)
     try:
@@ -170,7 +184,7 @@ def api_scene():
     img, media = _img_from_payload(data)
     if not img:
         return jsonify({'success': False, 'error': 'image required'}), 400
-    ok, _rem, reason = check_and_count_use()
+    ok, _rem, reason = check_ai_use(image=True)   # SOLO qui il cap a 3: è la spesa vera
     if not ok:
         return _limit_response(reason)
     try:
@@ -183,7 +197,7 @@ def api_scene():
 @app.route('/api/store/product-insight', methods=['POST'])
 def api_insight():
     d = request.get_json(silent=True) or {}
-    ok, _rem, reason = check_and_count_use()
+    ok, _rem, reason = check_ai_use(image=False)
     if not ok:
         return _limit_response(reason)
     try:
